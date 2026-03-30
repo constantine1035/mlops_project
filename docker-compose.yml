@@ -1,0 +1,115 @@
+services:
+  db:
+    image: postgres:14
+    environment:
+      POSTGRES_DB: ml_db
+      POSTGRES_USER: ml_user
+      POSTGRES_PASSWORD: ml_password
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.5.7
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      CONFLUENT_SUPPORT_METRICS_ENABLE: "false"
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:5.5.7
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CONFLUENT_SUPPORT_METRICS_ENABLE: "false"
+    ports:
+      - "9092:9092"
+
+  ml_service:
+    build:
+      context: .
+      dockerfile: ml_service/Dockerfile
+    depends_on:
+      - db
+      - kafka
+    environment:
+      DATABASE_URL: postgresql+psycopg2://ml_user:ml_password@db:5432/ml_db
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: predictions
+      MODEL_PATH: /model/model.joblib
+    volumes:
+      - ./model:/model
+    ports:
+      - '8000:8000'
+
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    depends_on:
+      - ml_service
+    environment:
+      PYTHONUNBUFFERED: '1'
+    ports:
+      - '8501:8501'
+
+  airflow:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    depends_on:
+      - db
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: 'True'
+      AIRFLOW__CORE__FERNET_KEY: 'dGhpc2lzbXlsYXJnZXNlY3JldA=='
+      MODEL_DIR: /model
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./train.py:/opt/airflow/train.py
+      - ./model:/model
+    ports:
+      - '8080:8080'
+    command: >-
+      bash -c "airflow db upgrade && airflow users create --username airflow --password airflow \
+      --firstname airflow --lastname airflow --role Admin --email airflow@example.com && \
+      airflow scheduler & airflow webserver"
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - '9090:9090'
+
+  grafana:
+    image: grafana/grafana:10.0.3
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    ports:
+      - '3000:3000'
+
+volumes:
+  db_data:
+    driver: local

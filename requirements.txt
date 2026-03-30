@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+pandas
+scikit-learn
+joblib
+SQLAlchemy
+psycopg2-binary
+prometheus-fastapi-instrumentator
+kafka-python
+streamlit
+requests
